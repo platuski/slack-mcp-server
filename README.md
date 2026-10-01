@@ -1,4 +1,77 @@
-# Slack MCP Server
+# Slack MCP Server (platuski fork)
+
+> [!NOTE]
+> **This is a fork of [korotovsky/slack-mcp-server](https://github.com/korotovsky/slack-mcp-server).**
+> It adds one feature, described in [Fork changes](#fork-changes) below. The [Upstream README](#upstream-readme) section after it is the original documentation, unchanged apart from one environment variable row marked *(fork)*.
+
+## Fork changes
+
+Based on upstream commit [`b88c0de`](https://github.com/korotovsky/slack-mcp-server/commit/b88c0de).
+
+### `SLACK_MCP_CHANNEL_TYPES`: restrict which conversation types the server exposes
+
+Upstream always exposes public channels, private channels, DMs and group DMs. This fork adds a comma separated allowlist:
+
+| Value             | Conversation type |
+|-------------------|-------------------|
+| `public_channel`  | Public channels   |
+| `private_channel` | Private channels  |
+| `im`              | Direct messages   |
+| `mpim`            | Group DMs         |
+
+Unset or empty keeps upstream behavior (all four types). An unknown value stops the server at startup.
+
+Example: channels only, no DM or group DM access:
+
+```json
+"env": {
+  "SLACK_MCP_CHANNEL_TYPES": "public_channel,private_channel"
+}
+```
+
+Excluded types are:
+
+- dropped from the channels cache, including entries loaded from a cache file written by an earlier unrestricted run;
+- filtered out of `channels_list`, `channels_me`, `conversations_unreads` and `conversations_search_messages`;
+- rejected by `conversations_history`, `conversations_replies`, `conversations_mark`, `conversations_join`, `conversations_leave`, `conversations_add_message`, `reactions_add` and `reactions_remove`. The check uses the cache first and falls back to `conversations.info`; if the type cannot be determined, the request is rejected.
+
+For the `channel_types` parameter of `channels_list` and `channels_me`, excluded types are dropped and logged as a warning when at least one allowed type is also requested. A request for excluded types only returns a `conversation type is not allowed` error naming the requested and the enabled types. When no usable type is given, the default `public_channel,private_channel` is limited to the enabled types.
+
+On startup the server logs `Conversation types restricted` with the allowed types.
+
+Known limits:
+
+- `attachment_get_data` takes a file ID without a channel, so a file shared in an excluded conversation can still be fetched by its ID.
+- Search filtering happens after Slack returns a page, so a page can hold fewer results than `limit`.
+- The `channels_list` and `channels_me` tool descriptions still list `im` and `mpim`.
+
+### Installing this fork
+
+The upstream install options (the `npx @korotovsky/slack-mcp-server` package, the `ghcr.io/korotovsky/slack-mcp-server` Docker image and upstream release binaries) install **upstream's build without this feature**. Build from this repository instead (Go 1.25 or newer):
+
+```bash
+git clone https://github.com/platuski/slack-mcp-server.git
+cd slack-mcp-server
+go build -o slack-mcp-server ./cmd/slack-mcp-server
+```
+
+Point your MCP client's `command` at the resulting binary. Authentication and all other configuration follow the upstream documentation below.
+
+### Syncing with upstream
+
+```bash
+git remote add upstream https://github.com/korotovsky/slack-mcp-server.git
+git fetch upstream
+git rebase upstream/master
+```
+
+---
+
+# Upstream README
+
+> [!NOTE]
+> Everything below is the original README of [korotovsky/slack-mcp-server](https://github.com/korotovsky/slack-mcp-server) at commit `b88c0de`. Requests for stars, issues and support refer to the upstream project. Install commands below install upstream's build; see [Installing this fork](#installing-this-fork) to get `SLACK_MCP_CHANNEL_TYPES`.
+
 [![Trust Score](https://archestra.ai/mcp-catalog/api/badge/quality/korotovsky/slack-mcp-server)](https://archestra.ai/mcp-catalog/korotovsky__slack-mcp-server)
 
 Model Context Protocol (MCP) server for Slack Workspaces. The most powerful MCP Slack server — supports Stdio, SSE and HTTP transports, proxy settings, DMs, Group DMs, Smart History fetch (by date or count), may work via OAuth or in complete stealth mode with no permissions and scopes in Workspace 😏.
@@ -295,7 +368,7 @@ Fetches a CSV directory of all users in the workspace.
 | `SLACK_MCP_MARK_TOOL`             | No        | `nil`                     | Enable the `conversations_mark` tool by setting to `true` or `1`. Disabled by default to prevent accidental marking of messages as read.                                                                                                                                                  |
 | `SLACK_MCP_USERS_CACHE`           | No        | `~/Library/Caches/slack-mcp-server/users_cache.json` (macOS)<br>`~/.cache/slack-mcp-server/users_cache.json` (Linux)<br>`%LocalAppData%/slack-mcp-server/users_cache.json` (Windows) | Path to the users cache file. Used to cache Slack user information to avoid repeated API calls on startup. |
 | `SLACK_MCP_CHANNELS_CACHE`        | No        | `~/Library/Caches/slack-mcp-server/channels_cache_v2.json` (macOS)<br>`~/.cache/slack-mcp-server/channels_cache_v2.json` (Linux)<br>`%LocalAppData%/slack-mcp-server/channels_cache_v2.json` (Windows) | Path to the channels cache file. Used to cache Slack channel information to avoid repeated API calls on startup. |
-| `SLACK_MCP_CHANNEL_TYPES`        | No        | all four types | Comma separated list of conversation types the server exposes: `public_channel`, `private_channel`, `im`, `mpim`. Example: `public_channel,private_channel` disables DM and group DM access. |
+| `SLACK_MCP_CHANNEL_TYPES` *(fork)* | No        | all four types | Comma separated list of conversation types the server exposes: `public_channel`, `private_channel`, `im`, `mpim`. Example: `public_channel,private_channel` disables DM and group DM access. |
 | `SLACK_MCP_LOG_LEVEL`             | No        | `info`                    | Log-level for stdout or stderr. Valid values are: `debug`, `info`, `warn`, `error`, `panic` and `fatal`                                                                                                                                                                                   |
 | `SLACK_MCP_GOVSLACK`              | No        | `nil`                     | Set to `true` to enable [GovSlack](https://slack.com/solutions/govslack) mode. Routes API calls to `slack-gov.com` endpoints instead of `slack.com` for FedRAMP-compliant government workspaces.                                                                                          |
 | `SLACK_MCP_ENABLED_TOOLS`         | No        | `nil`                     | Comma-separated list of tools to register. If empty, all read-only tools and usergroups tools are registered; write tools (`conversations_add_message`, `reactions_add`, `reactions_remove`, `attachment_get_data`) require their specific env var OR must be explicitly listed here. When a write tool is listed here, it's enabled without channel restrictions. Available tools: `conversations_history`, `conversations_replies`, `conversations_add_message`, `reactions_add`, `reactions_remove`, `attachment_get_data`, `conversations_search_messages`, `channels_list`, `usergroups_list`, `usergroups_me`, `usergroups_create`, `usergroups_update`, `usergroups_users_update`. |
