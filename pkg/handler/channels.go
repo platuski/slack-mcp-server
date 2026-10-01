@@ -27,19 +27,12 @@ type Channel struct {
 
 type ChannelsHandler struct {
 	apiProvider *provider.ApiProvider
-	validTypes  map[string]bool
 	logger      *zap.Logger
 }
 
 func NewChannelsHandler(apiProvider *provider.ApiProvider, logger *zap.Logger) *ChannelsHandler {
-	validTypes := make(map[string]bool, len(provider.AllChanTypes))
-	for _, v := range provider.AllChanTypes {
-		validTypes[v] = true
-	}
-
 	return &ChannelsHandler{
 		apiProvider: apiProvider,
-		validTypes:  validTypes,
 		logger:      logger,
 	}
 }
@@ -129,20 +122,10 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 
 	// MCP Inspector v0.14.0 has issues with Slice type
 	// introspection, so some type simplification makes sense here
-	channelTypes := []string{}
-	for _, t := range strings.Split(types, ",") {
-		t = strings.TrimSpace(t)
-		if ch.validTypes[t] {
-			channelTypes = append(channelTypes, t)
-		} else if t != "" {
-			ch.logger.Warn("Invalid channel type ignored", zap.String("type", t))
-		}
-	}
-
-	if len(channelTypes) == 0 {
-		ch.logger.Debug("No valid channel types provided, using defaults")
-		channelTypes = append(channelTypes, provider.PubChanType)
-		channelTypes = append(channelTypes, provider.PrivateChanType)
+	channelTypes, err := provider.ResolveRequestedChanTypes(types, ch.logger)
+	if err != nil {
+		ch.logger.Warn("Requested channel types are not allowed", zap.Error(err))
+		return nil, err
 	}
 
 	ch.logger.Debug("Validated channel types", zap.Strings("types", channelTypes))
@@ -237,7 +220,9 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 func (ch *ChannelsHandler) ChannelsMeHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ch.logger.Debug("ChannelsMeHandler called")
 
-	types := request.GetString("channel_types", "public_channel,private_channel")
+	// Empty lets the resolver apply public_channel,private_channel limited to
+	// the enabled types, so an im,mpim only config does not reject the default.
+	types := request.GetString("channel_types", "")
 	cursor := request.GetString("cursor", "")
 	limit := request.GetInt("limit", 0)
 
@@ -248,15 +233,10 @@ func (ch *ChannelsHandler) ChannelsMeHandler(ctx context.Context, request mcp.Ca
 		limit = 999
 	}
 
-	channelTypes := []string{}
-	for _, t := range strings.Split(types, ",") {
-		t = strings.TrimSpace(t)
-		if ch.validTypes[t] {
-			channelTypes = append(channelTypes, t)
-		}
-	}
-	if len(channelTypes) == 0 {
-		channelTypes = []string{provider.PubChanType, provider.PrivateChanType}
+	channelTypes, err := provider.ResolveRequestedChanTypes(types, ch.logger)
+	if err != nil {
+		ch.logger.Warn("Requested channel types are not allowed", zap.Error(err))
+		return nil, err
 	}
 
 	// Fetch channels via the Slack API, stopping as soon as we have enough

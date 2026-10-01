@@ -630,7 +630,20 @@ func (ch *ConversationsHandler) ConversationsSearchHandler(ctx context.Context, 
 	}
 	ch.logger.Debug("Search completed", zap.Int("matches", len(messagesRes.Matches)))
 
-	messages := ch.convertMessagesFromSearch(ctx, messagesRes.Matches)
+	matches := messagesRes.Matches
+	if !provider.AllChanTypesAllowed() {
+		filtered := matches[:0:0]
+		for _, m := range matches {
+			if provider.IsSearchChannelAllowed(m.Channel) {
+				filtered = append(filtered, m)
+			}
+		}
+		ch.logger.Debug("Search results filtered by channel type",
+			zap.Int("before", len(matches)), zap.Int("after", len(filtered)))
+		matches = filtered
+	}
+
+	messages := ch.convertMessagesFromSearch(ctx, matches)
 	if len(messages) > 0 && messagesRes.Pagination.Page < messagesRes.Pagination.PageCount {
 		nextCursor := fmt.Sprintf("page:%d", messagesRes.Pagination.Page+1)
 		messages[len(messages)-1].Cursor = base64.StdEncoding.EncodeToString([]byte(nextCursor))
@@ -728,7 +741,16 @@ func (ch *ConversationsHandler) processClientCountsResponse(ctx context.Context,
 		// Get channel info from cache to determine type and name
 		channelName := snap.ID
 		channelType := "internal"
-		if cached, ok := channelsMaps.Channels[snap.ID]; ok {
+		cached, isCached := channelsMaps.Channels[snap.ID]
+		// The cache holds enabled types only; an uncached channel passes only
+		// when both public and private channels are enabled.
+		if !isCached && !(provider.IsChanTypeAllowed(provider.ChanTypePublic) && provider.IsChanTypeAllowed(provider.ChanTypePrivate)) {
+			continue
+		}
+		if isCached && !provider.IsChannelAllowed(cached) {
+			continue
+		}
+		if isCached {
 			// The cached name may already have # prefix, so handle both cases
 			name := cached.Name
 			if strings.HasPrefix(name, "#") {
@@ -759,7 +781,7 @@ func (ch *ConversationsHandler) processClientCountsResponse(ctx context.Context,
 
 	// Process MPIMs (group DMs)
 	for _, snap := range counts.MPIMs {
-		if !snap.HasUnreads {
+		if !snap.HasUnreads || !provider.IsChanTypeAllowed(provider.ChanTypeMPIM) {
 			continue
 		}
 
@@ -795,7 +817,7 @@ func (ch *ConversationsHandler) processClientCountsResponse(ctx context.Context,
 
 	// Process IMs (direct messages)
 	for _, snap := range counts.IMs {
-		if !snap.HasUnreads {
+		if !snap.HasUnreads || !provider.IsChanTypeAllowed(provider.ChanTypeIM) {
 			continue
 		}
 
@@ -959,6 +981,18 @@ func (ch *ConversationsHandler) getUnreadsViaConversationsInfo(ctx context.Conte
 	totalRateLimited := 0
 
 	for _, group := range groups {
+		// Apply SLACK_MCP_CHANNEL_TYPES: keep only enabled Slack types in each group.
+		var enabledTypes []string
+		for _, t := range group.slackTypes {
+			if provider.IsChanTypeAllowed(t) {
+				enabledTypes = append(enabledTypes, t)
+			}
+		}
+		if len(enabledTypes) == 0 {
+			continue
+		}
+		group.slackTypes = enabledTypes
+
 		// Apply channel_types filter: skip groups that don't match the requested filter.
 		if params.channelTypes != "all" {
 			match := false
@@ -1352,6 +1386,10 @@ func (ch *ConversationsHandler) ConversationsMarkHandler(ctx context.Context, re
 	channel := params.channel
 	ts := params.ts
 
+	if err := ch.ensureChannelTypeAllowed(ctx, channel); err != nil {
+		return nil, err
+	}
+
 	if ts == "" {
 		// Fetch the latest message to get its timestamp
 		historyParams := slack.GetConversationHistoryParameters{
@@ -1397,6 +1435,9 @@ func (ch *ConversationsHandler) ConversationsLeaveHandler(ctx context.Context, r
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve channel: %w", err)
 	}
+	if err := ch.ensureChannelTypeAllowed(ctx, channel); err != nil {
+		return nil, err
+	}
 
 	notInChannel, err := ch.apiProvider.Slack().LeaveConversationContext(ctx, channel)
 	if err != nil {
@@ -1424,6 +1465,9 @@ func (ch *ConversationsHandler) ConversationsJoinHandler(ctx context.Context, re
 	channel, err := ch.resolveChannelID(ctx, channel)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve channel: %w", err)
+	}
+	if err := ch.ensureChannelTypeAllowed(ctx, channel); err != nil {
+		return nil, err
 	}
 
 	_, _, _, err = ch.apiProvider.Slack().JoinConversationContext(ctx, channel)
@@ -1484,6 +1528,17 @@ func isChannelAllowedForConfig(channel, config string) bool {
 
 func isChannelAllowed(channel string) bool {
 	return isChannelAllowedForConfig(channel, os.Getenv("SLACK_MCP_ADD_MESSAGE_TOOL"))
+}
+
+// ensureChannelTypeAllowed rejects conversations whose type is excluded by
+// SLACK_MCP_CHANNEL_TYPES (for example DMs when only channels are enabled).
+func (ch *ConversationsHandler) ensureChannelTypeAllowed(ctx context.Context, channelID string) error {
+	if err := ch.apiProvider.CheckChannelTypeAllowed(ctx, channelID); err != nil {
+		ch.logger.Warn("Conversation blocked by channel type restriction",
+			zap.String("channel", channelID), zap.Error(err))
+		return err
+	}
+	return nil
 }
 
 func (ch *ConversationsHandler) resolveChannelID(ctx context.Context, channel string) (string, error) {
@@ -1735,6 +1790,10 @@ func (ch *ConversationsHandler) parseParamsToolConversations(ctx context.Context
 		channel = resolvedChannel
 	}
 
+	if err := ch.ensureChannelTypeAllowed(ctx, channel); err != nil {
+		return nil, err
+	}
+
 	return &conversationParams{
 		channel:  channel,
 		limit:    paramLimit,
@@ -1770,6 +1829,9 @@ func (ch *ConversationsHandler) parseParamsToolAddMessage(ctx context.Context, r
 	channel, err := ch.resolveChannelID(ctx, channel)
 	if err != nil {
 		ch.logger.Error("Channel not found", zap.String("channel", channel), zap.Error(err))
+		return nil, err
+	}
+	if err := ch.ensureChannelTypeAllowed(ctx, channel); err != nil {
 		return nil, err
 	}
 	if !isChannelAllowed(channel) {
@@ -1865,6 +1927,9 @@ func (ch *ConversationsHandler) parseParamsToolReaction(ctx context.Context, req
 	channel, err := ch.resolveChannelID(ctx, channel)
 	if err != nil {
 		ch.logger.Error("Channel not found", zap.String("channel", channel), zap.Error(err))
+		return nil, err
+	}
+	if err := ch.ensureChannelTypeAllowed(ctx, channel); err != nil {
 		return nil, err
 	}
 	if !isChannelAllowedForConfig(channel, toolConfig) {

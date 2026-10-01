@@ -30,7 +30,6 @@ const defaultUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/5
 const defaultCacheTTL = 24 * time.Hour
 const defaultMinRefreshInterval = 30 * time.Second
 
-var AllChanTypes = []string{"mpim", "im", "public_channel", "private_channel"}
 var PrivateChanType = "private_channel"
 var PubChanType = "public_channel"
 
@@ -636,6 +635,17 @@ func New(transport string, logger *zap.Logger) *ApiProvider {
 		err          error
 	)
 
+	if err := ChanTypesConfigError(); err != nil {
+		logger.Fatal("Invalid "+ChannelTypesEnv+" value", zap.Error(err))
+	}
+	if !AllChanTypesAllowed() {
+		logger.Info("Conversation types restricted",
+			zap.String("env", ChannelTypesEnv),
+			zap.Strings("allowed", AllChanTypes),
+			zap.String("context", "console"),
+		)
+	}
+
 	// Read all environment variables
 	xoxpToken := os.Getenv("SLACK_MCP_XOXP_TOKEN")
 	xoxbToken := os.Getenv("SLACK_MCP_XOXB_TOKEN")
@@ -1089,6 +1099,10 @@ func (ap *ApiProvider) refreshChannelsInternal(ctx context.Context, force bool) 
 					ChannelsInv: make(map[string]string, len(cachedChannels)),
 				}
 				for _, c := range cachedChannels {
+					// Drop entries of disabled types, e.g. DMs cached by an earlier unrestricted run.
+					if !IsChannelAllowed(c) {
+						continue
+					}
 					if c.IsIM {
 						remappedChannel := mapChannel(
 							c.ID, "", "", c.Topic, c.Purpose,
@@ -1310,6 +1324,10 @@ func (ap *ApiProvider) GetChannels(ctx context.Context, channelTypes []string) [
 		ChannelsInv: make(map[string]string, len(chans)),
 	}
 	for _, ch := range chans {
+		// The edge API returns all types regardless of the request; keep enabled types only.
+		if !IsChannelAllowed(ch) {
+			continue
+		}
 		newSnapshot.Channels[ch.ID] = ch
 		newSnapshot.ChannelsInv[ch.Name] = ch.ID
 	}
