@@ -2,7 +2,7 @@
 
 > [!NOTE]
 > **This is a fork of [korotovsky/slack-mcp-server](https://github.com/korotovsky/slack-mcp-server).**
-> It adds two features, described in [Fork changes](#fork-changes) below. The [Upstream README](#upstream-readme) section after it is the original documentation, unchanged apart from one environment variable row marked *(fork)*.
+> It adds the features described in [Fork changes](#fork-changes) below. The [Upstream README](#upstream-readme) section after it is the original documentation, unchanged apart from environment variable rows marked *(fork)*.
 
 ## Fork changes
 
@@ -34,6 +34,7 @@ Excluded types are:
 - dropped from the channels cache, including entries loaded from a cache file written by an earlier unrestricted run;
 - filtered out of `channels_list`, `channels_me`, `conversations_unreads` and `conversations_search_messages`;
 - rejected by `conversations_history`, `conversations_replies`, `conversations_mark`, `conversations_join`, `conversations_leave`, `conversations_add_message`, `reactions_add` and `reactions_remove`. The check uses the cache first and falls back to `conversations.info`; if the type cannot be determined, the request is rejected.
+- rejected by `attachment_get_data` unless the file is also shared in a conversation of an enabled type (see [Attachments](#attachments-with-filesread)).
 
 For the `channel_types` parameter of `channels_list` and `channels_me`, excluded types are dropped and logged as a warning when at least one allowed type is also requested. A request for excluded types only returns a `conversation type is not allowed` error naming the requested and the enabled types. When no usable type is given, the default `public_channel,private_channel` is limited to the enabled types.
 
@@ -41,7 +42,6 @@ On startup the server logs `Conversation types restricted` with the allowed type
 
 Known limits:
 
-- `attachment_get_data` takes a file ID without a channel, so a file shared in an excluded conversation can still be fetched by its ID.
 - With `search.messages`, search filtering happens after Slack returns a page, so a page can hold fewer results than `limit`.
 - The `channels_list` and `channels_me` tool descriptions still list `im` and `mpim`.
 
@@ -70,6 +70,20 @@ This fork can search through Slack's [Real-time Search API](https://docs.slack.d
 4. Restart the MCP client. On startup the server logs `Message search uses Real-time Search (assistant.search.context)` with the searchable conversation types.
 
 The scopes used by the rest of the server stay the same, for example `channels:read`, `groups:read`, `channels:history`, `groups:history` and `users:read`.
+
+#### Optional read scopes
+
+These can be added without opening DM access:
+
+- `users:read.email`: `users_search` with an email address returns the user with exactly that email (from the users cache, or `users.lookupByEmail` when the cache does not have it yet). Without the scope, Slack omits email addresses and email queries return an error naming the scope. Slack Connect users from other organizations are not found by email.
+- `files:read`: `attachment_get_data` returns files (also set `SLACK_MCP_ATTACHMENT_TOOL=true`); without the scope it returns an error naming it. Slack does not limit this scope by conversation type: a file shared only in a DM can be fetched by its ID. The server guards it, see [Attachments](#attachments-with-filesread).
+
+#### Scopes to never add for DM-safe use
+
+- `im:read`, `im:history`, `mpim:read`, `mpim:history` and other `im:*` / `mpim:*` scopes
+- `search:read`, `search:read.im`, `search:read.mpim`
+- `reactions:read`: `reactions.list` returns DM messages you reacted to
+- `canvases:read`, `lists:read`
 
 #### How the search API is chosen
 
@@ -104,6 +118,16 @@ Checked against a live workspace with `public_channel,private_channel` and the t
 - Every tool call's arguments, including `search_query`, are logged at info level by the upstream request logger.
 
 The request client and parts of the result handling are based on [korotovsky/slack-mcp-server#328](https://github.com/korotovsky/slack-mcp-server/pull/328) by Jason George.
+
+### Attachments with `files:read`
+
+When `SLACK_MCP_CHANNEL_TYPES` excludes any type, `attachment_get_data` checks where a file is shared before downloading it. `files.info` lists the conversations (`channels`, `groups`, `ims` and the `shares.public` / `shares.private` maps); the file is returned only when at least one of them is in the channels cache and of an enabled type. A file shared only in DMs or group DMs, a file without shares, and a file whose conversations are not in the cache (for example archived channels) are rejected with a generic `conversation type is not allowed` error that does not say where the file is shared. Without a restriction, files are returned as upstream.
+
+Downloads only go to `https://files.slack.com` (`files.slack-gov.com` with `SLACK_MCP_GOVSLACK=true`). A redirect to any other host is refused instead of followed, so the token is never sent elsewhere, and downloads are capped at 5 MB.
+
+### `SLACK_MCP_READ_ONLY`: register no write tools
+
+With `SLACK_MCP_READ_ONLY=true` the server does not register tools that change Slack state, even when `SLACK_MCP_ENABLED_TOOLS` or a tool's own variable enables them: `conversations_add_message`, `reactions_add`, `reactions_remove`, `conversations_mark`, `conversations_join`, `conversations_leave`, `usergroups_create`, `usergroups_update`, `usergroups_users_update`, `saved_update` and `saved_clear_completed`. `conversations_unreads` stays available; it does not mark messages as read. Unset or `false` keeps upstream behavior.
 
 ### Installing this fork
 
@@ -429,6 +453,7 @@ Fetches a CSV directory of all users in the workspace.
 | `SLACK_MCP_USERS_CACHE`           | No        | `~/Library/Caches/slack-mcp-server/users_cache.json` (macOS)<br>`~/.cache/slack-mcp-server/users_cache.json` (Linux)<br>`%LocalAppData%/slack-mcp-server/users_cache.json` (Windows) | Path to the users cache file. Used to cache Slack user information to avoid repeated API calls on startup. |
 | `SLACK_MCP_CHANNELS_CACHE`        | No        | `~/Library/Caches/slack-mcp-server/channels_cache_v2.json` (macOS)<br>`~/.cache/slack-mcp-server/channels_cache_v2.json` (Linux)<br>`%LocalAppData%/slack-mcp-server/channels_cache_v2.json` (Windows) | Path to the channels cache file. Used to cache Slack channel information to avoid repeated API calls on startup. |
 | `SLACK_MCP_CHANNEL_TYPES` *(fork)* | No        | all four types | Comma separated list of conversation types the server exposes: `public_channel`, `private_channel`, `im`, `mpim`. Example: `public_channel,private_channel` disables DM and group DM access. |
+| `SLACK_MCP_READ_ONLY` *(fork)* | No        | `false` | Set to `true` to not register write tools (`conversations_add_message`, `reactions_*`, `conversations_mark`, `conversations_join`, `conversations_leave`, `usergroups_create`, `usergroups_update`, `usergroups_users_update`, `saved_update`, `saved_clear_completed`), even when other settings enable them. |
 | `SLACK_MCP_LOG_LEVEL`             | No        | `info`                    | Log-level for stdout or stderr. Valid values are: `debug`, `info`, `warn`, `error`, `panic` and `fatal`                                                                                                                                                                                   |
 | `SLACK_MCP_GOVSLACK`              | No        | `nil`                     | Set to `true` to enable [GovSlack](https://slack.com/solutions/govslack) mode. Routes API calls to `slack-gov.com` endpoints instead of `slack.com` for FedRAMP-compliant government workspaces.                                                                                          |
 | `SLACK_MCP_ENABLED_TOOLS`         | No        | `nil`                     | Comma-separated list of tools to register. If empty, all read-only tools and usergroups tools are registered; write tools (`conversations_add_message`, `reactions_add`, `reactions_remove`, `attachment_get_data`) require their specific env var OR must be explicitly listed here. When a write tool is listed here, it's enabled without channel restrictions. Available tools: `conversations_history`, `conversations_replies`, `conversations_add_message`, `reactions_add`, `reactions_remove`, `attachment_get_data`, `conversations_search_messages`, `channels_list`, `usergroups_list`, `usergroups_me`, `usergroups_create`, `usergroups_update`, `usergroups_users_update`. |
