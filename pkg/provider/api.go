@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -225,6 +226,7 @@ type SlackAPI interface {
 	GetConversationHistoryContext(ctx context.Context, params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error)
 	GetConversationRepliesContext(ctx context.Context, params *slack.GetConversationRepliesParameters) (msgs []slack.Message, hasMore bool, nextCursor string, err error)
 	SearchContext(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, *slack.SearchFiles, error)
+	AssistantSearchContext(ctx context.Context, params AssistantSearchContextRequest) (json.RawMessage, error)
 
 	// Used to get files
 	GetFileInfoContext(ctx context.Context, fileID string, count, page int) (*slack.File, []slack.Comment, *slack.Paging, error)
@@ -261,6 +263,7 @@ type SlackAPI interface {
 type MCPSlackClient struct {
 	slackClient *slack.Client
 	edgeClient  *edge.Client
+	httpClient  *http.Client
 
 	authResponse *slack.AuthTestResponse
 	authProvider auth.Provider
@@ -270,6 +273,10 @@ type MCPSlackClient struct {
 	isBotToken   bool
 	edgeFailed   bool // set when edge API fails; subsequent calls skip straight to standard API
 	teamEndpoint string
+
+	// Scopes granted to a user OAuth token; used to pick the search API.
+	oauthScopes      []string
+	oauthScopesKnown bool
 }
 
 type ApiProvider struct {
@@ -346,16 +353,29 @@ func NewMCPSlackClient(authProvider auth.Provider, logger *zap.Logger) (*MCPSlac
 	isOAuth := strings.HasPrefix(token, "xoxp-") || strings.HasPrefix(token, "xoxb-") || strings.HasPrefix(token, "xoxe.xoxp-") || strings.HasPrefix(token, "xoxe.xoxb-")
 	isBotToken := strings.HasPrefix(token, "xoxb-") || strings.HasPrefix(token, "xoxe.xoxb-")
 
-	return &MCPSlackClient{
+	client := &MCPSlackClient{
 		slackClient:  slackClient,
 		edgeClient:   edgeClient,
+		httpClient:   httpClient,
 		authResponse: authResponse,
 		authProvider: authProvider,
 		isEnterprise: isEnterprise,
 		isOAuth:      isOAuth,
 		isBotToken:   isBotToken,
 		teamEndpoint: authResp.URL,
-	}, nil
+	}
+
+	if isOAuth && !isBotToken {
+		scopes, err := client.fetchOAuthScopes(context.Background())
+		if err != nil {
+			logger.Warn("Could not read OAuth scopes; message search uses search.messages", zap.Error(err))
+		} else {
+			client.oauthScopes = scopes
+			client.oauthScopesKnown = true
+		}
+	}
+
+	return client, nil
 }
 
 func (c *MCPSlackClient) AuthTest() (*slack.AuthTestResponse, error) {
@@ -741,6 +761,13 @@ func newWithXOXP(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 
 		usersCachePath:    usersCache,
 		channelsCachePath: channelsCache,
+	}
+	if ap.SearchBackend() == SearchBackendRealTime {
+		scopes, _ := ap.OAuthScopes()
+		logger.Info("Message search uses Real-time Search (assistant.search.context)",
+			zap.Strings("channel_types", RealTimeSearchChanTypes(scopes)),
+			zap.String("context", "console"),
+		)
 	}
 	// Initialize with empty snapshots
 	ap.usersSnapshot.Store(&UsersCache{
