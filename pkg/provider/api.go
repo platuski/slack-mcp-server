@@ -232,6 +232,9 @@ type SlackAPI interface {
 	GetFileInfoContext(ctx context.Context, fileID string, count, page int) (*slack.File, []slack.Comment, *slack.Paging, error)
 	GetFileContext(ctx context.Context, downloadURL string, writer io.Writer) error
 
+	// Used to look up a user by email (users:read.email)
+	GetUserByEmailContext(ctx context.Context, email string) (*slack.User, error)
+
 	// Used to get channel info (for unread counts with xoxp tokens)
 	GetConversationInfoContext(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error)
 
@@ -558,6 +561,10 @@ func (c *MCPSlackClient) AddReactionContext(ctx context.Context, name string, it
 
 func (c *MCPSlackClient) RemoveReactionContext(ctx context.Context, name string, item slack.ItemRef) error {
 	return c.slackClient.RemoveReactionContext(ctx, name, item)
+}
+
+func (c *MCPSlackClient) GetUserByEmailContext(ctx context.Context, email string) (*slack.User, error) {
+	return c.slackClient.GetUserByEmailContext(ctx, email)
 }
 
 func (c *MCPSlackClient) GetFileInfoContext(ctx context.Context, fileID string, count, page int) (*slack.File, []slack.Comment, *slack.Paging, error) {
@@ -1445,6 +1452,10 @@ func (ap *ApiProvider) SearchUsers(ctx context.Context, query string, limit int)
 	}
 
 	if ap.IsOAuth() {
+		if IsEmailQuery(query) {
+			scopes, known := ap.OAuthScopes()
+			return ap.searchUsersByEmail(ctx, query, scopes, known)
+		}
 		return ap.searchUsersInCache(query, limit)
 	}
 
