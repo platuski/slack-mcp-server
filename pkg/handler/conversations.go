@@ -604,6 +604,10 @@ func (ch *ConversationsHandler) ConversationsRepliesHandler(ctx context.Context,
 func (ch *ConversationsHandler) ConversationsSearchHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ch.logger.Debug("ConversationsSearchHandler called", zap.Any("params", request.Params))
 
+	if ch.apiProvider.SearchBackend() == provider.SearchBackendRealTime {
+		return ch.realTimeSearch(ctx, request)
+	}
+
 	params, err := ch.parseParamsToolSearch(ctx, request)
 	if err != nil {
 		ch.logger.Error("Failed to parse search params", zap.Error(err))
@@ -2057,6 +2061,10 @@ func (ch *ConversationsHandler) parseParamsToolMark(request mcp.CallToolRequest)
 	}, nil
 }
 func (ch *ConversationsHandler) parseParamsToolSearch(ctx context.Context, req mcp.CallToolRequest) (*searchParams, error) {
+	if err := rejectUnsupportedSearchFilters(req, provider.SearchBackendLegacy, nil); err != nil {
+		return nil, err
+	}
+
 	rawQuery := strings.TrimSpace(req.GetString("search_query", ""))
 	freeText, filters := splitQuery(rawQuery)
 
