@@ -2,7 +2,7 @@
 
 > [!NOTE]
 > **This is a fork of [korotovsky/slack-mcp-server](https://github.com/korotovsky/slack-mcp-server).**
-> It adds one feature, described in [Fork changes](#fork-changes) below. The [Upstream README](#upstream-readme) section after it is the original documentation, unchanged apart from one environment variable row marked *(fork)*.
+> It adds two features, described in [Fork changes](#fork-changes) below. The [Upstream README](#upstream-readme) section after it is the original documentation, unchanged apart from one environment variable row marked *(fork)*.
 
 ## Fork changes
 
@@ -42,12 +42,72 @@ On startup the server logs `Conversation types restricted` with the allowed type
 Known limits:
 
 - `attachment_get_data` takes a file ID without a channel, so a file shared in an excluded conversation can still be fetched by its ID.
-- Search filtering happens after Slack returns a page, so a page can hold fewer results than `limit`.
+- With `search.messages`, search filtering happens after Slack returns a page, so a page can hold fewer results than `limit`.
 - The `channels_list` and `channels_me` tool descriptions still list `im` and `mpim`.
+
+### DM-safe message search with granular Slack scopes
+
+Upstream's `conversations_search_messages` calls `search.messages`, which needs the `search:read` scope. That scope covers every conversation the user can see, including DMs and group DMs, and `SLACK_MCP_CHANNEL_TYPES` can only filter the results afterwards.
+
+This fork can search through Slack's [Real-time Search API](https://docs.slack.dev/apis/web-api/real-time-search-api) (`assistant.search.context`) instead. It uses one scope per conversation type, so Slack itself refuses DM and group DM search when those scopes are not granted.
+
+#### Setup for channel search without DM access
+
+1. In your Slack app ([api.slack.com/apps](https://api.slack.com/apps)), open **OAuth & Permissions** and add these **User Token Scopes**:
+   - `search:read.public`
+   - `search:read.private`
+
+   Do not add `search:read`, `search:read.im` or `search:read.mpim`. With `search:read` the server keeps using `search.messages`.
+2. Reinstall the app to the workspace (Slack shows a banner after a scope change). The token only gets the new scopes after the reinstall. If the User OAuth Token value on that page changed, update it in your MCP client config.
+3. Restrict the server to channels:
+
+   ```json
+   "env": {
+     "SLACK_MCP_XOXP_TOKEN": "xoxp-...",
+     "SLACK_MCP_CHANNEL_TYPES": "public_channel,private_channel"
+   }
+   ```
+4. Restart the MCP client. On startup the server logs `Message search uses Real-time Search (assistant.search.context)` with the searchable conversation types.
+
+The scopes used by the rest of the server stay the same, for example `channels:read`, `groups:read`, `channels:history`, `groups:history` and `users:read`.
+
+#### How the search API is chosen
+
+At startup the server reads the token's scopes from the `X-OAuth-Scopes` header of `auth.test`.
+
+| Token | Search API |
+|-------|------------|
+| User OAuth token (`xoxp`) with `search:read.public`, `.private`, `.mpim` or `.im` and without `search:read` | `assistant.search.context` |
+| User OAuth token with `search:read`, without search scopes, or whose scopes cannot be read | `search.messages` (upstream) |
+| Browser session tokens (`xoxc`/`xoxd`) | `search.messages` (upstream) |
+| Bot token (`xoxb`) | no search tool (upstream) |
+
+#### Behavior with Real-time Search
+
+- Slack is asked only for conversation types that are both enabled by `SLACK_MCP_CHANNEL_TYPES` and covered by a granted search scope.
+- Every result is checked again: results from DMs, from group DMs or from a conversation of a type that is not enabled are dropped. The type comes from the channels cache, or from `conversations.info` for channels the cache does not hold (archived channels, channels created later, `--no-cache`); if it cannot be determined, the result is dropped. DM IDs are never looked up.
+- `search_query` must contain search text. The `in:`, `from:`, `before:`, `after:`, `on:`, `during:` and `is:thread` modifiers are taken out of the query and applied as API parameters or local filters. Dates are whole UTC days, and `after:` excludes the given day as in Slack's own modifiers.
+- `filter_users_with` and `with:` are rejected: the API has no participant filter. `filter_in_im_or_mpim` is rejected unless `im` or `mpim` is both enabled and covered by a scope. Filters that cannot be used are left out of the tool schema.
+- Slack returns at most 20 results per page. The server fetches up to 10 pages to fill `limit` (at most 100) and always uses keyword search (`disable_semantic_search`). The author, channel and threads-only filters are also checked locally, so a page can hold fewer results than `limit`; if all fetched results were filtered out, the response holds only a cursor to continue.
+- Errors name the fix: `missing_scope` names the scope to add, and `not_allowed_token_type`, `feature_not_enabled` and `assistant_search_context_disabled` get their own messages.
+
+With `search.messages`, `filter_in_im_or_mpim` and `filter_users_with` are also rejected and hidden when neither `im` nor `mpim` is enabled. Unrestricted configurations keep the upstream schema and behavior.
+
+#### Limits
+
+Checked against a live workspace with `public_channel,private_channel` and the two scopes above: a phrase that exists only in a DM returned no results, and Slack returned no DM result that the server had to drop.
+
+- Public channel results do not require channel membership; search also covers public channels the user has not joined (as Slack documents).
+- Slack Connect channels: a shared channel the user is a member of was searchable, with and without `filter_in_channel`. Other Slack Connect setups are untested.
+- Keyword search works without a Slack AI Search plan. Semantic search is never requested. Very common words (for example `the`) return no results on their own.
+- Real-time Search must be available to the app: Slack offers it to internal apps and to apps published in the Slack Marketplace.
+- Every tool call's arguments, including `search_query`, are logged at info level by the upstream request logger.
+
+The request client and parts of the result handling are based on [korotovsky/slack-mcp-server#328](https://github.com/korotovsky/slack-mcp-server/pull/328) by Jason George.
 
 ### Installing this fork
 
-The upstream install options (the `npx @korotovsky/slack-mcp-server` package, the `ghcr.io/korotovsky/slack-mcp-server` Docker image and upstream release binaries) install **upstream's build without this feature**. Build from this repository instead (Go 1.25 or newer):
+The upstream install options (the `npx @korotovsky/slack-mcp-server` package, the `ghcr.io/korotovsky/slack-mcp-server` Docker image and upstream release binaries) install **upstream's build without these features**. Build from this repository instead (Go 1.25 or newer):
 
 ```bash
 git clone https://github.com/platuski/slack-mcp-server.git
