@@ -438,6 +438,17 @@ func (ch *ConversationsHandler) FilesGetHandler(ctx context.Context, request mcp
 	fileInfo, _, _, err := ch.apiProvider.Slack().GetFileInfoContext(ctx, params.fileID, 0, 0)
 	if err != nil {
 		ch.logger.Error("Slack GetFileInfoContext failed", zap.Error(err))
+		var slackErr slack.SlackErrorResponse
+		if errors.As(err, &slackErr) && slackErr.Err == "missing_scope" {
+			return nil, errors.New("reading files needs the files:read scope; add it to the Slack app's User Token Scopes and reinstall the app")
+		}
+		return nil, err
+	}
+
+	// files:read is not limited by conversation type, so check where the file
+	// is shared before downloading anything.
+	if err := ch.apiProvider.CheckFileAllowed(fileInfo); err != nil {
+		ch.logger.Warn("Attachment blocked by channel type restriction", zap.String("file_id", params.fileID))
 		return nil, err
 	}
 

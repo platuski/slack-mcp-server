@@ -564,10 +564,6 @@ func (c *MCPSlackClient) GetFileInfoContext(ctx context.Context, fileID string, 
 	return c.slackClient.GetFileInfoContext(ctx, fileID, count, page)
 }
 
-func (c *MCPSlackClient) GetFileContext(ctx context.Context, downloadURL string, writer io.Writer) error {
-	return c.slackClient.GetFileContext(ctx, downloadURL, writer)
-}
-
 func (c *MCPSlackClient) GetConversationInfoContext(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error) {
 	return c.slackClient.GetConversationInfoContext(ctx, input)
 }
