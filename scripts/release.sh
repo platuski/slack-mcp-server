@@ -45,12 +45,23 @@ last_n=$(git tag -l "$base-fork.*" | sed "s/^$base-fork\.//" | { grep -E '^[0-9]
 tag="$base-fork.$(( ${last_n:-0} + 1 ))"
 ok "Next release: $tag (upstream $base${previous:+, previous $previous})"
 
-if [ -n "$previous" ] && git merge-base --is-ancestor "$previous" HEAD; then
-	range="$previous..HEAD"
-else
-	range="$base..HEAD"
+# List fork commits only: leave out commits that are part of upstream, and
+# after an upstream sync, rebased commits that the previous release had.
+exclude=()
+if git rev-parse -q --verify refs/remotes/upstream/master >/dev/null; then
+	exclude=(^refs/remotes/upstream/master)
 fi
-changes=$(git log --no-merges --format='• %s' "$range")
+if [ -n "$previous" ] && git merge-base --is-ancestor "$previous" HEAD; then
+	changes=$(git log --no-merges --format='• %s' "$previous..HEAD" ${exclude[@]+"${exclude[@]}"})
+elif [ -n "$previous" ]; then
+	changes=$(git log --no-merges --cherry-pick --right-only --format='• %s' "$previous...HEAD" ${exclude[@]+"${exclude[@]}"})
+else
+	changes=$(git log --no-merges --format='• %s' "$base..HEAD" ${exclude[@]+"${exclude[@]}"})
+fi
+if [ -n "$previous" ] && [ "${previous%-fork.*}" != "$base" ]; then
+	changes="• Synced with upstream $base${changes:+
+$changes}"
+fi
 [ -n "$changes" ] || die "No commits since $previous."
 info ""
 info "Changes:"
