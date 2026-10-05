@@ -92,13 +92,21 @@ notes=$(cat <<EOF
 
 $(printf '%s\n' "$changes" | sed 's/^• /- /')
 
+## Install
+
+\`\`\`bash
+git clone https://github.com/$repo.git
+cd $(basename "$repo")
+./scripts/install-mac.sh
+\`\`\`
+
 ## Update
 
 \`\`\`bash
 ./scripts/update.sh
 \`\`\`
 
-Then restart Claude Desktop (Cmd+Q) and start a new Codex session.
+Then restart Claude Desktop (Cmd+Q) and start a new Codex session. Setup details are in the [README](https://github.com/$repo#installing-this-fork).
 EOF
 )
 if ! printf '%s' "$repo" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
