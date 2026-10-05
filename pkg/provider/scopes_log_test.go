@@ -1,9 +1,12 @@
 package provider
 
 import (
+	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
@@ -33,4 +36,27 @@ func TestUnitLogOAuthScopes(t *testing.T) {
 			assert.Equal(t, []interface{}{"im:history"}, warns[0].ContextMap()["scopes"])
 		}
 	})
+}
+
+func TestUnitSlackAppManifestIsDMSafe(t *testing.T) {
+	raw, err := os.ReadFile("../../slack-app-manifest.json")
+	require.NoError(t, err)
+	var manifest struct {
+		OAuthConfig struct {
+			Scopes struct {
+				User []string `json:"user"`
+				Bot  []string `json:"bot"`
+			} `json:"scopes"`
+		} `json:"oauth_config"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &manifest))
+	scopes := manifest.OAuthConfig.Scopes.User
+
+	assert.Empty(t, DMScopes(scopes), "the manifest must not request DM scopes")
+	assert.Empty(t, manifest.OAuthConfig.Scopes.Bot, "the server uses a user token only")
+	for _, s := range []string{"channels:read", "channels:history", "groups:read", "groups:history",
+		"users:read", "search:read.public", "search:read.private"} {
+		assert.Contains(t, scopes, s)
+	}
+	assert.NotContains(t, scopes, "search:read", "legacy search:read also covers DMs")
 }

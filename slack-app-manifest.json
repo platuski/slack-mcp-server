@@ -1,0 +1,26 @@
+{
+  "display_information": {
+    "name": "Slack MCP (channels only)",
+    "description": "Read-only access to public and private channels for slack-mcp-server. No DM or group DM scopes."
+  },
+  "oauth_config": {
+    "scopes": {
+      "user": [
+        "channels:read",
+        "channels:history",
+        "groups:read",
+        "groups:history",
+        "users:read",
+        "users:read.email",
+        "search:read.public",
+        "search:read.private",
+        "files:read"
+      ]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}
