@@ -53,7 +53,7 @@ This fork can search through Slack's [Real-time Search API](https://docs.slack.d
 
 #### Setup for channel search without DM access
 
-1. In your Slack app ([api.slack.com/apps](https://api.slack.com/apps)), open **OAuth & Permissions** and add these **User Token Scopes**:
+1. Create a Slack app from [`slack-app-manifest.json`](slack-app-manifest.json): at [api.slack.com/apps](https://api.slack.com/apps) choose **Create New App → From a manifest**, pick the workspace and paste the file. It has exactly the scopes below (including the optional `users:read.email` and `files:read`) and no DM scopes. For an existing app, open **OAuth & Permissions** and add these **User Token Scopes**:
    - `search:read.public`
    - `search:read.private`
 
@@ -131,23 +131,64 @@ With `SLACK_MCP_READ_ONLY=true` the server does not register tools that change S
 
 ### Installing this fork
 
-The upstream install options (the `npx @korotovsky/slack-mcp-server` package, the `ghcr.io/korotovsky/slack-mcp-server` Docker image and upstream release binaries) install **upstream's build without these features**. Build from this repository instead (Go 1.25 or newer):
+The upstream install options (the `npx @korotovsky/slack-mcp-server` package, the `ghcr.io/korotovsky/slack-mcp-server` Docker image and upstream release binaries) install **upstream's build without these features**. Install from this repository instead.
+
+#### macOS
 
 ```bash
 git clone https://github.com/platuski/slack-mcp-server.git
 cd slack-mcp-server
+./scripts/install-mac.sh
+```
+
+The script:
+
+1. checks for git, curl, python3 and Go 1.25 or newer (and offers `brew install go` when Go is missing);
+2. switches the clone to the newest fork release and builds `~/bin/slack-mcp-server` (`--bin PATH` for another location, `--current` to build the current checkout instead);
+3. offers to copy [`slack-app-manifest.json`](slack-app-manifest.json) to the clipboard and open Slack's app page if you have no Slack app yet, then asks for your Slack User OAuth Token with hidden input, checks it with `auth.test`, and lists the scopes it has: it stops when a required scope is missing and warns about scopes that can read DMs;
+4. adds a `slack-channels` server (`--name NAME` for another name) to Claude Desktop and Codex with `SLACK_MCP_CHANNEL_TYPES=public_channel,private_channel` and `SLACK_MCP_READ_ONLY=true`, plus `SLACK_MCP_ATTACHMENT_TOOL=true` when the token has `files:read`. Other servers in those configs are left as they are, and each file is backed up next to itself first.
+
+Run it again to change the token or settings; press Enter at the token prompt to keep the current one. At the end it offers to restart Claude Desktop; start a new Codex session yourself.
+
+#### Updating
+
+```bash
+./scripts/update.sh
+```
+
+It fetches the fork's releases, shows what changed since your version, switches to the newest one and rebuilds the binary. It stops when the clone has uncommitted changes. Restart Claude Desktop and Codex afterwards; the server logs its version at startup.
+
+To hear about new releases, watch the repository on GitHub for releases only: **Watch → Custom → Releases**. Release notes are on the [releases page](https://github.com/platuski/slack-mcp-server/releases).
+
+#### Other systems or by hand
+
+```bash
 go build -o slack-mcp-server ./cmd/slack-mcp-server
 ```
 
-Point your MCP client's `command` at the resulting binary. Authentication and all other configuration follow the upstream documentation below.
+Point your MCP client's `command` at the resulting binary and set the variables above in its `env`. Authentication and all other configuration follow the upstream documentation below.
 
-### Syncing with upstream
+### Releases and syncing with upstream (maintainers)
+
+Releases are git tags named after the upstream release they are based on plus a fork number, for example `v1.3.0-fork.1`. `install-mac.sh` and `update.sh` only use these tags, so users get tested versions and are not affected when `master` is rebased.
+
+Sync with upstream by rebasing the fork commits:
 
 ```bash
 git remote add upstream https://github.com/korotovsky/slack-mcp-server.git
 git fetch upstream
 git rebase upstream/master
+git push --force-with-lease origin master
 ```
+
+After testing, release from an up-to-date `master`:
+
+```bash
+./scripts/release.sh --dry-run   # next tag and changes
+./scripts/release.sh
+```
+
+It runs `go vet` and the unit tests, picks the next tag (`<upstream release>-fork.<n>`), pushes only that tag (never `--tags`, so upstream's own tags stay out of the fork), creates a GitHub Release with the changes (with `gh`, logged in to the fork's account) and prints an announcement for Slack.
 
 ---
 
