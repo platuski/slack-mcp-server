@@ -375,6 +375,7 @@ func NewMCPSlackClient(authProvider auth.Provider, logger *zap.Logger) (*MCPSlac
 		} else {
 			client.oauthScopes = scopes
 			client.oauthScopesKnown = true
+			logOAuthScopes(logger, scopes)
 		}
 	}
 

@@ -67,7 +67,7 @@ This fork can search through Slack's [Real-time Search API](https://docs.slack.d
      "SLACK_MCP_CHANNEL_TYPES": "public_channel,private_channel"
    }
    ```
-4. Restart the MCP client. On startup the server logs `Message search uses Real-time Search (assistant.search.context)` with the searchable conversation types.
+4. Restart the MCP client. On startup the server logs `Message search uses Real-time Search (assistant.search.context)` with the searchable conversation types. It also logs `OAuth token scopes` with every scope the token has, and a warning if any of them can read DMs or group DMs.
 
 The scopes used by the rest of the server stay the same, for example `channels:read`, `groups:read`, `channels:history`, `groups:history` and `users:read`.
 
