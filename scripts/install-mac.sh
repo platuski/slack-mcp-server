@@ -184,7 +184,11 @@ else
 		python3 "$CONFIGURE" write "${write_args[@]}" --name "$name" --bin "$bin"
 	)
 	if [ -n "$token" ]; then
-		ok "Settings: public and private channels only, read-only, attachments ${attachments:+on}${attachments:-off}"
+		if [ -n "$attachments" ]; then
+			ok "Settings: public and private channels only, read-only, attachments on"
+		else
+			ok "Settings: public and private channels only, read-only, attachments off"
+		fi
 	else
 		ok "Settings: public and private channels only, read-only; attachment setting unchanged"
 	fi
